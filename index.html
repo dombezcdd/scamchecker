@@ -1,1 +1,365 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Scam Checker</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            color: white;
+        }
+        
+        .header h1 {
+            font-size: 22px;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        
+        .tabs {
+            display: flex;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 5px;
+            margin-bottom: 20px;
+        }
+        
+        .tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .tab.active {
+            background: white;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .search-box {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus {
+            border-color: #667eea;
+        }
+        
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            margin-top: 10px;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        .result {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 20px;
+            display: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .scam {
+            border-left: 5px solid #ff6b6b;
+        }
+        
+        .safe {
+            border-left: 5px solid #4cd137;
+        }
+        
+        .warning {
+            border-left: 5px solid #fbc531;
+        }
+        
+        .guarantors-list {
+            background: white;
+            border-radius: 15px;
+            padding: 15px;
+            margin-top: 15px;
+            display: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .guarantor-item {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .guarantor-item:last-child {
+            border-bottom: none;
+        }
+        
+        .verified-badge {
+            background: #4cd137;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Scam Protector</h1>
+            <p>Проверка пользователей на мошенничество</p>
+        </div>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('check')">Проверка</div>
+            <div class="tab" onclick="switchTab('guarantors')">Гаранты</div>
+        </div>
+        
+        <div id="checkTab">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Введите @username или номер...">
+                <button onclick="checkUser()">🔍 Проверить пользователя</button>
+            </div>
+            
+            <div id="result" class="result"></div>
+        </div>
+        
+        <div id="guarantorsTab" style="display: none;">
+            <div class="search-box">
+                <input type="text" id="guarantorSearch" placeholder="Поиск гаранта...">
+                <button onclick="searchGuarantor()">🔎 Найти гаранта</button>
+            </div>
+            
+            <div class="guarantors-list" id="guarantorsList">
+                <!-- Гаранты будут загружаться здесь -->
+            </div>
+        </div>
+    </div>
 
+    <script>
+        // База данных мошенников (приводим к нижнему регистру)
+        const scamDatabase = {
+            "scammer1": {type: "Продажа несуществующих товаров", date: "15.12.2024"},
+            "scammer2": {type: "Фейковый магазин", date: "10.12.2024"}, 
+            "+79123456789": {type: "Кидала на предоплате", date: "05.12.2024"},
+            "fake_store": {type: "Обман при доставке", date: "01.12.2024"},
+            "trust_me": {type: "Фишинг", date: "28.11.2024"}
+        };
+
+        // База проведенных гарантов
+        const guarantorsDatabase = {
+            "trusted_garantor": {deals: 47, rating: "⭐ 4.9", since: "2023"},
+            "safe_deals": {deals: 123, rating: "⭐ 4.8", since: "2022"},
+            "secure_trade": {deals: 89, rating: "⭐ 5.0", since: "2023"},
+            "official_guarantor": {deals: 256, rating: "⭐ 4.7", since: "2021"}
+        };
+
+        // Инициализация Telegram Web App
+        let tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
+
+        // Переключение вкладок
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.getElementById('checkTab').style.display = 'none';
+            document.getElementById('guarantorsTab').style.display = 'none';
+            
+            if (tabName === 'check') {
+                document.querySelector('.tab:nth-child(1)').classList.add('active');
+                document.getElementById('checkTab').style.display = 'block';
+            } else {
+                document.querySelector('.tab:nth-child(2)').classList.add('active');
+                document.getElementById('guarantorsTab').style.display = 'block';
+                loadGuarantors();
+            }
+        }
+
+        // Проверка пользователя
+        function checkUser() {
+            let input = document.getElementById('searchInput').value.trim();
+            
+            // Убираем @ в начале если есть и приводим к нижнему регистру
+            input = input.replace(/^@/, '').toLowerCase();
+            
+            const resultDiv = document.getElementById('result');
+            
+            if (!input) {
+                showResult('❌ Введите username или номер для проверки', 'warning');
+                return;
+            }
+            
+            if (scamDatabase[input]) {
+                const info = scamDatabase[input];
+                showResult(`
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 10px;">🚨</div>
+                        <h2 style="margin-bottom: 10px; color: #e84118;">ОПАСНО! НЕ РАБОТАТЬ!</h2>
+                        <p><strong>${input}</strong></p>
+                        <p>Тип мошенничества: ${info.type}</p>
+                        <p>Добавлен в базу: ${info.date}</p>
+                        <div style="background: #ffe6e6; padding: 10px; border-radius: 8px; margin-top: 10px;">
+                            ⚠ <strong>Рекомендуется полный отказ от сотрудничества</strong>
+                        </div>
+                    </div>
+                `, 'scam');
+            } else {
+                showResult(`
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 10px;">🔍</div>
+                        <h2 style="margin-bottom: 10px; color: #4cd137;">ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН В БАЗЕ</h2>
+                        <p><strong>${input}</strong> отсутствует в списке мошенников</p>
+                        <div style="background: #fff3cd; padding: 12px; border-radius: 8px; margin-top: 15px; border-left: 4px solid #ffc107;">
+                            <strong>⚠ ВНИМАНИЕ!</strong><br>
+                            Это не гарантирует безопасность!<br>
+                            Всегда проверяйте отзывы и используйте гарантов
+                        </div>
+                        <div style="margin-top: 15px;">
+                            <button onclick="switchTab('guarantors')" style="background: #3498db; padding: 10px 20px; border: none; border-radius: 8px; color: white; cursor: pointer;">
+                                📞 Найти гаранта
+                            </button>
+                        </div>
+                    </div>
+                `, 'safe');
+            }
+        }
+
+        // Загрузка списка гарантов
+        function loadGuarantors() {
+            const container = document.getElementById('guarantorsList');
+            container.innerHTML = '';
+            container.style.display = 'block';
+            
+            Object.entries(guarantorsDatabase).forEach(([username, info]) => {
+                const item = document.createElement('div');
+                item.className = 'guarantor-item';
+                item.innerHTML = `
+                    <div>
+                        <strong>@${username}</strong>
+                        <div style="font-size: 12px; color: #666;">
+                            Сделок: ${info.deals} | ${info.rating}
+                        </div>
+                        <div style="font-size: 11px; color: #888;">
+                            Работает с ${info.since}
+                        </div>
+                    </div>
+                    <div class="verified-badge">Проверен</div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        // Поиск гаранта
+        function searchGuarantor() {
+            const searchTerm = document.getElementById('guarantorSearch').value.trim().toLowerCase();
+            const container = document.getElementById('guarantorsList');
+            
+            if (!searchTerm) {
+                loadGuarantors();
+                return;
+            }
+            
+            container.innerHTML = '';
+            container.style.display = 'block';
+            
+            const filteredGuarantors = Object.entries(guarantorsDatabase)
+                .filter(([username]) => username.includes(searchTerm));
+            
+            if (filteredGuarantors.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 20px; color: #666;">
+                        🔍 Гарант не найден
+                    </div>
+                `;
+                return;
+            }
+            
+            filteredGuarantors.forEach(([username, info]) => {
+                const item = document.createElement('div');
+                item.className = 'guarantor-item';
+                item.innerHTML = `
+                    <div>
+                        <strong>@${username}</strong>
+                        <div style="font-size: 12px; color: #666;">
+                            Сделок: ${info.deals} | ${info.rating}
+                        </div>
+                    </div>
+                    <div class="verified-badge">Проверен</div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        // Показать результат
+        function showResult(content, type) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = content;
+            resultDiv.className = 'result ' + type;
+            resultDiv.style.display = 'block';
+            resultDiv.scrollIntoView({behavior: 'smooth'});
+        }
+
+        // Поиск при нажатии Enter
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') checkUser();
+        });
+        
+        document.getElementById('guarantorSearch').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') searchGuarantor();
+        });
+    </script>
+</body>
+</html>
