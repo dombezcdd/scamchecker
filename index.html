@@ -56,6 +56,7 @@
             border-radius: 8px;
             cursor: pointer;
             transition: all 0.3s;
+            font-size: 14px;
         }
         
         .tab.active {
@@ -125,7 +126,7 @@
             border-left: 5px solid #fbc531;
         }
         
-        .guarantors-list {
+        .guarantors-list, .scam-guarantors-list {
             background: white;
             border-radius: 15px;
             padding: 15px;
@@ -134,7 +135,7 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         }
         
-        .guarantor-item {
+        .guarantor-item, .scam-guarantor-item {
             padding: 12px;
             border-bottom: 1px solid #eee;
             display: flex;
@@ -142,7 +143,7 @@
             align-items: center;
         }
         
-        .guarantor-item:last-child {
+        .guarantor-item:last-child, .scam-guarantor-item:last-child {
             border-bottom: none;
         }
         
@@ -153,6 +154,24 @@
             border-radius: 20px;
             font-size: 12px;
             font-weight: bold;
+        }
+        
+        .scam-badge {
+            background: #ff6b6b;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .scam-reason {
+            background: #ffe6e6;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: #e84118;
         }
     </style>
 </head>
@@ -166,6 +185,7 @@
         <div class="tabs">
             <div class="tab active" onclick="switchTab('check')">Проверка</div>
             <div class="tab" onclick="switchTab('guarantors')">Гаранты</div>
+            <div class="tab" onclick="switchTab('scamGuarantors')">Скам Гаранты</div>
         </div>
         
         <div id="checkTab">
@@ -187,6 +207,17 @@
                 <!-- Гаранты будут загружаться здесь -->
             </div>
         </div>
+        
+        <div id="scamGuarantorsTab" style="display: none;">
+            <div class="search-box">
+                <input type="text" id="scamGuarantorSearch" placeholder="Поиск скам гаранта...">
+                <button onclick="searchScamGuarantor()">🔎 Найти скам гаранта</button>
+            </div>
+            
+            <div class="scam-guarantors-list" id="scamGuarantorsList">
+                <!-- Скам гаранты будут загружаться здесь -->
+            </div>
+        </div>
     </div>
 
     <script>
@@ -196,7 +227,8 @@
             "scammer2": {type: "Фейковый магазин", date: "10.12.2024"}, 
             "+79123456789": {type: "Кидала на предоплате", date: "05.12.2024"},
             "fake_store": {type: "Обман при доставке", date: "01.12.2024"},
-            "trust_me": {type: "Фишинг", date: "28.11.2024"}
+            "trust_me": {type: "Фишинг", date: "28.11.2024"},
+            "ttgher": {type: "Скам на NFT, нет отзывов, второй аккаунт гаранта", date: "20.12.2024"}
         };
 
         // База проведенных гарантов
@@ -204,7 +236,18 @@
             "trusted_garantor": {deals: 47, rating: "⭐ 4.9", since: "2023"},
             "safe_deals": {deals: 123, rating: "⭐ 4.8", since: "2022"},
             "secure_trade": {deals: 89, rating: "⭐ 5.0", since: "2023"},
-            "official_guarantor": {deals: 256, rating: "⭐ 4.7", since: "2021"}
+            "official_guarantor": {deals: 256, rating: "⭐ 4.7", since: "2021"},
+            "swagslave": {deals: 34, rating: "⭐ 4.8", since: "2023"},
+            "gross": {deals: 78, rating: "⭐ 4.9", since: "2022"}
+        };
+
+        // База скам гарантов
+        const scamGuarantorsDatabase = {
+            "ttgher": {
+                reason: "Скам на NFT, нет отзывов, гарант это второй аккаунт",
+                date: "20.12.2024",
+                details: "Мошенник создает иллюзию гаранта, но на самом деле это второй аккаунт для обмана при сделках с NFT"
+            }
         };
 
         // Инициализация Telegram Web App
@@ -217,14 +260,19 @@
             document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
             document.getElementById('checkTab').style.display = 'none';
             document.getElementById('guarantorsTab').style.display = 'none';
+            document.getElementById('scamGuarantorsTab').style.display = 'none';
             
             if (tabName === 'check') {
                 document.querySelector('.tab:nth-child(1)').classList.add('active');
                 document.getElementById('checkTab').style.display = 'block';
-            } else {
+            } else if (tabName === 'guarantors') {
                 document.querySelector('.tab:nth-child(2)').classList.add('active');
                 document.getElementById('guarantorsTab').style.display = 'block';
                 loadGuarantors();
+            } else {
+                document.querySelector('.tab:nth-child(3)').classList.add('active');
+                document.getElementById('scamGuarantorsTab').style.display = 'block';
+                loadScamGuarantors();
             }
         }
 
@@ -302,6 +350,36 @@
             });
         }
 
+        // Загрузка списка скам гарантов
+        function loadScamGuarantors() {
+            const container = document.getElementById('scamGuarantorsList');
+            container.innerHTML = '';
+            container.style.display = 'block';
+            
+            Object.entries(scamGuarantorsDatabase).forEach(([username, info]) => {
+                const item = document.createElement('div');
+                item.className = 'scam-guarantor-item';
+                item.innerHTML = `
+                    <div style="width: 100%;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong>@${username}</strong>
+                            <div class="scam-badge">СКАМ</div>
+                        </div>
+                        <div style="font-size: 11px; color: #888; margin-top: 5px;">
+                            Добавлен: ${info.date}
+                        </div>
+                        <div class="scam-reason">
+                            <strong>Причина:</strong> ${info.reason}
+                        </div>
+                        <div style="font-size: 11px; color: #666; margin-top: 5px;">
+                            ${info.details}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
         // Поиск гаранта
         function searchGuarantor() {
             const searchTerm = document.getElementById('guarantorSearch').value.trim().toLowerCase();
@@ -343,6 +421,52 @@
             });
         }
 
+        // Поиск скам гаранта
+        function searchScamGuarantor() {
+            const searchTerm = document.getElementById('scamGuarantorSearch').value.trim().toLowerCase();
+            const container = document.getElementById('scamGuarantorsList');
+            
+            if (!searchTerm) {
+                loadScamGuarantors();
+                return;
+            }
+            
+            container.innerHTML = '';
+            container.style.display = 'block';
+            
+            const filteredScamGuarantors = Object.entries(scamGuarantorsDatabase)
+                .filter(([username]) => username.includes(searchTerm));
+            
+            if (filteredScamGuarantors.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 20px; color: #666;">
+                        🔍 Скам гарант не найден
+                    </div>
+                `;
+                return;
+            }
+            
+            filteredScamGuarantors.forEach(([username, info]) => {
+                const item = document.createElement('div');
+                item.className = 'scam-guarantor-item';
+                item.innerHTML = `
+                    <div style="width: 100%;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong>@${username}</strong>
+                            <div class="scam-badge">СКАМ</div>
+                        </div>
+                        <div style="font-size: 11px; color: #888; margin-top: 5px;">
+                            Добавлен: ${info.date}
+                        </div>
+                        <div class="scam-reason">
+                            <strong>Причина:</strong> ${info.reason}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
         // Показать результат
         function showResult(content, type) {
             const resultDiv = document.getElementById('result');
@@ -359,6 +483,10 @@
         
         document.getElementById('guarantorSearch').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') searchGuarantor();
+        });
+        
+        document.getElementById('scamGuarantorSearch').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') searchScamGuarantor();
         });
     </script>
 </body>
