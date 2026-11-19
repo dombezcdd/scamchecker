@@ -3,6 +3,7 @@ import hmac
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -15,14 +16,28 @@ from pydantic import BaseModel, Field
 from db import ASSETS, ensure_user, get_balances, exchange, get_history, init_db
 
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-app = FastAPI(title="WALLET BOT Demo API")
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-STATIC_DIR.mkdir(parents=True, exist_ok=True)
+INDEX_FILE = STATIC_DIR / "index.html"
+
+if not INDEX_FILE.is_file():
+    raise RuntimeError("Не найден файл static/index.html")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="WALLET Mini App", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Учебные фиксированные коэффициенты, НЕ рыночные котировки.
+
+# Фиксированные демонстрационные курсы. Это не рыночные котировки.
 DEMO_RATES = {
     "TON": {"USDT": 5.0, "BTC": 0.00005, "ETH": 0.0015, "BNB": 0.007, "SOL": 0.04},
     "USDT": {"TON": 0.2, "BTC": 0.00001, "ETH": 0.0003, "BNB": 0.0014, "SOL": 0.008},
@@ -32,77 +47,113 @@ DEMO_RATES = {
     "SOL": {"TON": 25.0, "USDT": 125.0, "BTC": 0.00125, "ETH": 0.0375, "BNB": 0.175},
 }
 
-def verify_init_data(init_data: str) -> dict:
+
+def verify_init_data(init_data: str):
     if not BOT_TOKEN or not init_data:
-        raise HTTPException(401, "Нет Telegram WebApp авторизации.")
+        raise HTTPException(status_code=401, detail="Нет Telegram WebApp авторизации.")
+
     parsed = dict(parse_qsl(init_data, keep_blank_values=True))
     received_hash = parsed.pop("hash", None)
+
     if not received_hash:
-        raise HTTPException(401, "Некорректные данные Telegram.")
-    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
-    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    calculated = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(calculated, received_hash):
-        raise HTTPException(401, "Не прошла проверка подписи Telegram.")
-    auth_date = int(parsed.get("auth_date", "0"))
-    if abs(time.time() - auth_date) > 86400:
-        raise HTTPException(401, "Сессия устарела. Откройте Mini App заново.")
+        raise HTTPException(status_code=401, detail="Некорректные данные Telegram.")
+
+    data_check_string = "\n".join(
+        f"{key}={value}" for key, value in sorted(parsed.items())
+    )
+
+    secret_key = hmac.new(
+        b"WebAppData",
+        BOT_TOKEN.encode(),
+        hashlib.sha256,
+    ).digest()
+
+    calculated_hash = hmac.new(
+        secret_key,
+        data_check_string.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(calculated_hash, received_hash):
+        raise HTTPException(status_code=401, detail="Не прошла проверка подписи Telegram.")
+
     try:
-        user = json.loads(parsed["user"])
-        return user
-    except Exception:
-        raise HTTPException(401, "Не удалось прочитать пользователя Telegram.")
+        auth_date = int(parsed.get("auth_date", "0"))
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Некорректная дата авторизации.")
+
+    if abs(time.time() - auth_date) > 86400:
+        raise HTTPException(status_code=401, detail="Сессия устарела. Откройте Mini App заново.")
+
+    try:
+        return json.loads(parsed["user"])
+    except (KeyError, json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=401, detail="Не удалось прочитать пользователя Telegram.")
+
 
 def telegram_user(authorization: str | None):
     if not authorization or not authorization.startswith("tma "):
-        raise HTTPException(401, "Откройте приложение через Telegram.")
+        raise HTTPException(status_code=401, detail="Откройте приложение через Telegram.")
     return verify_init_data(authorization[4:])
+
 
 class ExchangeRequest(BaseModel):
     from_asset: str
     to_asset: str
     amount: float = Field(gt=0, le=1_000_000)
 
-@app.on_event("startup")
-def startup():
-    init_db()
 
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return FileResponse(str(INDEX_FILE))
+
 
 @app.get("/api/me")
 def me(authorization: str | None = Header(default=None)):
     user = telegram_user(authorization)
-    uid = int(user["id"])
-    ensure_user(uid, user.get("username"))
+    user_id = int(user["id"])
+    ensure_user(user_id, user.get("username"))
+
     return {
-        "user": {"id": uid, "first_name": user.get("first_name", "Пользователь")},
-        "balances": get_balances(uid),
+        "user": {
+            "id": user_id,
+            "first_name": user.get("first_name", "Пользователь"),
+        },
+        "balances": get_balances(user_id),
         "assets": list(ASSETS),
-        "notice": "ДЕМО-БАЛАНСЫ: это внутренние тестовые единицы, не реальные криптоактивы."
+        "notice": "ДЕМО-БАЛАНСЫ: это внутренние тестовые единицы, не реальные криптоактивы.",
     }
+
 
 @app.get("/api/history")
 def history(authorization: str | None = Header(default=None)):
     user = telegram_user(authorization)
     return {"items": get_history(int(user["id"]))}
 
+
 @app.get("/api/rates")
 def rates():
     return {"rates": DEMO_RATES, "mode": "DEMO_FIXED"}
 
+
 @app.post("/api/exchange")
-def do_exchange(body: ExchangeRequest, authorization: str | None = Header(default=None)):
+def do_exchange(
+    body: ExchangeRequest,
+    authorization: str | None = Header(default=None),
+):
     user = telegram_user(authorization)
-    a, b = body.from_asset.upper(), body.to_asset.upper()
-    if a not in ASSETS or b not in ASSETS or a == b:
-        raise HTTPException(400, "Выберите разные поддерживаемые валюты.")
-    rate = DEMO_RATES.get(a, {}).get(b)
-    if not rate:
-        raise HTTPException(400, "Для этой пары нет демонстрационного курса.")
+    from_asset = body.from_asset.upper()
+    to_asset = body.to_asset.upper()
+
+    if from_asset not in ASSETS or to_asset not in ASSETS or from_asset == to_asset:
+        raise HTTPException(status_code=400, detail="Выберите разные поддерживаемые валюты.")
+
+    rate = DEMO_RATES.get(from_asset, {}).get(to_asset)
+    if rate is None:
+        raise HTTPException(status_code=400, detail="Для этой пары нет демонстрационного курса.")
+
     try:
-        received = exchange(int(user["id"]), a, b, body.amount, rate)
+        received = exchange(int(user["id"]), from_asset, to_asset, body.amount, rate)
         return {"ok": True, "received": received, "rate": rate}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
