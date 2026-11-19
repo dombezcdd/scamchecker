@@ -1,152 +1,117 @@
+import asyncio
+import math
 import os
-import sqlite3
-from contextlib import contextmanager
-from pathlib import Path
 
-DB_PATH = os.getenv("DATABASE_PATH", "wallet.db")
-ASSETS = ("TON", "USDT", "BTC", "ETH", "BNB", "SOL")
+from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message, MenuButtonWebApp, WebAppInfo
+import uvicorn
 
-@contextmanager
-def connect():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+from db import ensure_user, init_db, credit, ASSETS
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
+ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
+PORT = int(os.getenv("PORT", "3000"))
+
+if not BOT_TOKEN:
+    raise RuntimeError("Не задан BOT_TOKEN в переменных окружения Bothost.")
+if not WEBAPP_URL.startswith("https://"):
+    raise RuntimeError("WEBAPP_URL должен быть HTTPS-адресом.")
+if not ADMIN_ID.isdigit():
+    raise RuntimeError("Добавь ADMIN_ID — свой числовой Telegram ID — в переменные Bothost.")
+
+ADMIN_ID = int(ADMIN_ID)
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+
+@dp.message(CommandStart())
+async def start_silent(message: Message):
+    if message.from_user:
+        ensure_user(message.from_user.id, message.from_user.username)
+
+
+@dp.message(Command("give"))
+async def give_demo_balance(message: Message):
+    if not message.from_user or message.from_user.id != ADMIN_ID:
+        await message.answer("У тебя нет доступа к этой команде.")
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) != 4:
+        await message.answer(
+            "Формат: /give ID ВАЛЮТА СУММА\n"
+            "Пример: /give 123456789 USDT 1000"
+        )
+        return
+
     try:
-        yield conn
-        conn.commit()
+        target_id = int(parts[1])
+        asset = parts[2].upper()
+        amount = float(parts[3])
+    except (ValueError, TypeError):
+        await message.answer("Проверь ID и сумму. Сумма должна быть числом.")
+        return
+
+    if target_id <= 0:
+        await message.answer("Telegram ID должен быть положительным числом.")
+        return
+    if asset not in ASSETS:
+        await message.answer("Неизвестная валюта. Доступно: " + ", ".join(ASSETS))
+        return
+    if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000_000:
+        await message.answer("Сумма должна быть больше 0 и не превышать 1 000 000 000.")
+        return
+
+    ensure_user(target_id)
+    credit(target_id, asset, amount, note=f"DEMO начисление администратором {ADMIN_ID}")
+    await message.answer(
+        f"Готово: пользователю {target_id} начислено {amount:g} DEMO {asset}."
+    )
+
+
+async def configure_menu():
+    await bot.set_chat_menu_button(
+        menu_button=MenuButtonWebApp(
+            text="Открыть WALLET",
+            web_app=WebAppInfo(url=WEBAPP_URL),
+        )
+    )
+
+
+async def run_web():
+    config = uvicorn.Config("app:app", host="0.0.0.0", port=PORT, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+async def main():
+    init_db()
+    await configure_menu()
+    web_task = asyncio.create_task(run_web(), name="web")
+    bot_task = asyncio.create_task(dp.start_polling(bot), name="telegram-bot")
+    tasks = {web_task, bot_task}
+
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for task in done:
+            exception = task.exception()
+            if exception is not None:
+                raise exception
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
     finally:
-        conn.close()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await bot.session.close()
 
-def init_db():
-    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True) if os.path.dirname(DB_PATH) else None
-    with connect() as c:
-        c.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS balances (
-            user_id INTEGER NOT NULL,
-            asset TEXT NOT NULL,
-            amount REAL NOT NULL DEFAULT 0,
-            PRIMARY KEY (user_id, asset)
-        );
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            kind TEXT NOT NULL,
-            asset TEXT NOT NULL,
-            amount REAL NOT NULL,
-            note TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS checks (
-            id TEXT PRIMARY KEY,
-            creator_id INTEGER NOT NULL,
-            asset TEXT NOT NULL,
-            amount REAL NOT NULL,
-            claimed_by INTEGER,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
 
-def ensure_user(user_id: int, username: str | None = None):
-    with connect() as c:
-        c.execute(
-            "INSERT INTO users(user_id, username) VALUES(?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username",
-            (user_id, username),
-        )
-        for asset in ASSETS:
-            c.execute(
-                "INSERT OR IGNORE INTO balances(user_id, asset, amount) VALUES(?, ?, 0)",
-                (user_id, asset),
-            )
-
-def get_balances(user_id: int):
-    ensure_user(user_id)
-    with connect() as c:
-        rows = c.execute(
-            "SELECT asset, amount FROM balances WHERE user_id=? ORDER BY asset",
-            (user_id,),
-        ).fetchall()
-        return {r["asset"]: float(r["amount"]) for r in rows}
-
-def credit(user_id: int, asset: str, amount: float, note: str):
-    ensure_user(user_id)
-    with connect() as c:
-        c.execute(
-            "UPDATE balances SET amount=amount+? WHERE user_id=? AND asset=?",
-            (amount, user_id, asset),
-        )
-        c.execute(
-            "INSERT INTO transactions(user_id, kind, asset, amount, note) VALUES(?,?,?,?,?)",
-            (user_id, "CREDIT", asset, amount, note),
-        )
-
-def exchange(user_id: int, from_asset: str, to_asset: str, amount: float, rate: float):
-    ensure_user(user_id)
-    with connect() as c:
-        row = c.execute(
-            "SELECT amount FROM balances WHERE user_id=? AND asset=?",
-            (user_id, from_asset),
-        ).fetchone()
-        if not row or float(row["amount"]) + 1e-12 < amount:
-            raise ValueError("Недостаточно DEMO-кредитов.")
-        received = amount * rate
-        c.execute(
-            "UPDATE balances SET amount=amount-? WHERE user_id=? AND asset=?",
-            (amount, user_id, from_asset),
-        )
-        c.execute(
-            "UPDATE balances SET amount=amount+? WHERE user_id=? AND asset=?",
-            (received, user_id, to_asset),
-        )
-        c.execute(
-            "INSERT INTO transactions(user_id, kind, asset, amount, note) VALUES(?,?,?,?,?)",
-            (user_id, "EXCHANGE_OUT", from_asset, -amount, f"В {to_asset}; курс {rate}"),
-        )
-        c.execute(
-            "INSERT INTO transactions(user_id, kind, asset, amount, note) VALUES(?,?,?,?,?)",
-            (user_id, "EXCHANGE_IN", to_asset, received, f"Из {from_asset}; курс {rate}"),
-        )
-        return received
-
-def create_check(check_id: str, creator_id: int, asset: str, amount: float):
-    with connect() as c:
-        c.execute(
-            "INSERT INTO checks(id, creator_id, asset, amount) VALUES(?,?,?,?)",
-            (check_id, creator_id, asset, amount),
-        )
-
-def claim_check(check_id: str, user_id: int):
-    with connect() as c:
-        row = c.execute("SELECT * FROM checks WHERE id=?", (check_id,)).fetchone()
-        if not row:
-            raise ValueError("Чек не найден.")
-        if row["claimed_by"] is not None:
-            raise ValueError("Этот чек уже активирован.")
-        if int(row["creator_id"]) == user_id:
-            raise ValueError("Нельзя активировать собственный чек.")
-        c.execute("UPDATE checks SET claimed_by=? WHERE id=? AND claimed_by IS NULL", (user_id, check_id))
-        if c.total_changes == 0:
-            raise ValueError("Чек уже активирован.")
-        c.execute(
-            "INSERT INTO balances(user_id, asset, amount) VALUES(?,?,?) "
-            "ON CONFLICT(user_id, asset) DO UPDATE SET amount=amount+excluded.amount",
-            (user_id, row["asset"], row["amount"]),
-        )
-        c.execute(
-            "INSERT INTO transactions(user_id, kind, asset, amount, note) VALUES(?,?,?,?,?)",
-            (user_id, "CHECK_CLAIM", row["asset"], row["amount"], f"Чек {check_id}"),
-        )
-        return row["asset"], float(row["amount"])
-
-def get_history(user_id: int, limit: int = 12):
-    with connect() as c:
-        rows = c.execute(
-            "SELECT kind, asset, amount, note, created_at FROM transactions "
-            "WHERE user_id=? ORDER BY id DESC LIMIT ?",
-            (user_id, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
+if __name__ == "__main__":
+    asyncio.run(main())
