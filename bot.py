@@ -47,7 +47,7 @@ from aiogram.types import (
 # Конфигурация
 # ---------------------------------------------------------------------------
 
-BOT_TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН_ОТ_BOTFATHER"
+BOT_TOKEN = "9045359691:AAHn3JGAKGDcl60HmFYikaB1jxP98hTt_Rc"
 ADMIN_IDS = {8684468454}  # твой Telegram user_id (можно добавить ещё через запятую)
 DB_PATH = "shop.db"
 
