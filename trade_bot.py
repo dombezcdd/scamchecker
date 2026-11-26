@@ -441,8 +441,9 @@ def search_text():
 
 # ---------------------- ХЭНДЛЕРЫ ----------------------
 dp = Dispatcher()
-dp.message.outer_middleware(SubMiddleware())
-dp.callback_query.outer_middleware(SubMiddleware())
+# обязательная подписка отключена (чтобы включить, раскомментируй две строки ниже)
+# dp.message.outer_middleware(SubMiddleware())
+# dp.callback_query.outer_middleware(SubMiddleware())
 
 @dp.message(CommandStart())
 async def cmd_start(m: Message, state: FSMContext):
