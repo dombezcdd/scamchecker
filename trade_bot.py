@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import sqlite3
 from html import escape
@@ -18,7 +19,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ===================== НАСТРОЙКИ =====================
-BOT_TOKEN = "9180370500:AAFn_Y_wW8wsnOkSWAOW_goqcjVWPiU9dy4"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН")
 ADMIN_ID = 1749483152
 CHANNEL = "@CTD_chanel"          # канал для обязательной подписки (ОП)
 DB_PATH = "units.db"
